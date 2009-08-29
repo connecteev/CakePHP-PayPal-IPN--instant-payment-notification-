@@ -74,5 +74,164 @@ class TestController extends AppController {
 		// submit the fields to paypal
 		$myPaypal->submitPayment();
 	}
+
+
+	public function process_ipn() {
+		App::import('Vendor', 'paypal', array('file' => 'paypal'.DS.'Paypal.php'));
+		$myPaypal = new Paypal();
+		$admin_email = 'put_admin_email_here@yahoo.com';
+
+		// Log the IPN results
+		$myPaypal->logIpn = TRUE;
+
+		// Enable test mode if needed
+		//$myPaypal->enableTestMode();
+
+		// Specify your paypal email
+		$paypal_email = 'my_random_email@yahoo.com';
+
+		// Check validity
+		if (! $myPaypal->validateIpn()) {
+			// paypal transaction did not validate.
+			$subject = 'Instant Payment did not validate';
+			$body = "A Paypal instant payment failed to validate.\n";
+			// send admin an email
+		} else {
+			// Assume everything is ok to begin with.
+			$validity_check = 1;
+			$subject = '';
+			$body = '';
+
+			// Paypal thinks the transaction is valid. Now we run our checks.
+			if ($myPaypal->ipnData['test_ipn'] == 1) {
+				if ($myPaypal->testMode) {
+					$body .= "We are in TEST mode.\n";
+					$subject .= 'TEST : ';
+				} else {
+					$body .= "WARNING. Payment was forged using an IPN simulator.\n";
+					$subject .= 'FORGERY : ';
+					$validity_check = 0;
+				}
+			}
+			$subject .= 'Paypal Instant Payment Notification - ';
+			$body .= "A Paypal instant payment notification was recieved.\n";
+			$body .= "from user: ".$myPaypal->ipnData['payer_email']." on ".date('m/d/Y');
+			$body .= " at ".date('g:i A')."\n\nDetails:\n";
+			$body .= "Payment status=".$myPaypal->ipnData['payment_status']."\n";
+
+			// case-insensitive string comparisons
+			if (strcasecmp($myPaypal->ipnData['txn_type'],'recurring_payment')==0) {
+				$paypal_payment_type = "Recurring payment received.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'recurring_payment_profile_created')==0) {
+				$paypal_payment_type = "Recurring payment profile created.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'subscr_payment')==0) {
+				$paypal_payment_type = "Subscription payment received.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'subscr_signup')==0) {
+				$paypal_payment_type = "Subscription started.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'send_money')==0) {
+				$paypal_payment_type = "Warning! Payment received; source is the Send Money tab on the PayPal website.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'subscr_cancel')==0) {
+				$paypal_payment_type = "Subscription canceled.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'subscr_eot')==0) {
+				$paypal_payment_type = "Subscription expired.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'subscr_failed')==0) {
+				$paypal_payment_type = "Subscription signup failed.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'subscr_modify')==0) {
+				$paypal_payment_type = "Subscription modified.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'virtual_terminal')==0) {
+				$paypal_payment_type = "Payment received; source is Virtual Terminal.\n";
+			} else if (strcasecmp($myPaypal->ipnData['txn_type'],'web_accept')==0) {
+				$paypal_payment_type = "Payment received; source is a Buy Now, Donation, or Auction Smart Logos button.\n";
+			} else {
+				$paypal_payment_type = "Error. Invalid Transaction type.\n";
+				$validity_check = 0;
+			}
+			$subject .= $paypal_payment_type;
+			$body .= $paypal_payment_type;
+
+			if (strcasecmp($myPaypal->ipnData['payment_status'],'completed')==0) {
+				$paypal_payment_status = "Payment is complete.\n";
+			} else if (strcasecmp($myPaypal->ipnData['payment_status'],'pending')==0) {
+				$paypal_payment_status = "Payment is pending.\n";
+			} else if (strcasecmp($myPaypal->ipnData['payment_status'],'denied')==0) {
+				$paypal_payment_status = "Payment was denied.\n";
+			} else {
+				$paypal_payment_status = "Unknown payment status?!\n";
+				$validity_check = 0;
+			}
+			$subject .= $paypal_payment_status;
+			$body .= $paypal_payment_status;
+
+			$body .= "Transaction ID: ".$myPaypal->ipnData['txn_id']."\n";
+			$body .= "TODO: Make sure this txn_id is unique\n";
+
+			$body .= "Recipient email=".$myPaypal->ipnData['receiver_email']."\n";
+			if (strcasecmp($myPaypal->ipnData['receiver_email'], $paypal_email) == 0) {
+				$body .= "Recipient email is valid.\n";
+			} else {
+				$body .= "Recipient email is INVALID.\n";
+				$validity_check = 0;
+			}
+
+			$body .= "Item name=".$myPaypal->ipnData['item_name']."\n";
+			if ($myPaypal->ipnData['item_name'] == $this->paid_lvl_1_plan_friendly_name) {
+				$body .= "Item is correct\n";
+			} else {
+				$body .= "INCORRECT item.\n";
+				$validity_check = 0;
+			}
+			$body .= "Payment amount =".$myPaypal->ipnData['mc_gross']."\n";
+			if ($myPaypal->ipnData['mc_gross'] == $this->paid_lvl_1_plan_cost) {
+				$body .= "Payment amount is correct\n";
+			} else {
+				$body .= "INCORRECT Payment amount.\n";
+				$validity_check = 0;
+			}
+			$body .= "Custom fields=".$myPaypal->ipnData['custom']."\n";
+
+			if ($validity_check == 1) {
+				$body .= "Congratulations. A valid payment transaction was processed.\n";
+				// send user an email saying his plan has been upgraded
+			} else {
+				$body .= "Sorry, there was something wrong with this transaction.\n";
+			}
+			foreach ($myPaypal->ipnData as $key => $value) {
+				$body .= "\n$key: $value";
+			}
+
+			// send admin a dump of all the data
+			mail($admin_email, $subject, $body);
+
+			/*
+			 * Save to the Invoices table
+			 * Available Data is in the following format
+			 *
+			 * $myPaypal->ipnData['txn_type']
+			 * $myPaypal->ipnData['mc_gross']
+			 * $myPaypal->ipnData['mc_amount3']
+			 * $myPaypal->ipnData['payment_status']
+			 * $myPaypal->ipnData['payment_date']
+			 * $myPaypal->ipnData['subscr_date']
+			 * $myPaypal->ipnData['txn_id'];
+			 * $myPaypal->ipnData['subscr_id'];
+			 * $myPaypal->ipnData['payer_id'];
+			 * $myPaypal->ipnData['payer_email'];
+			 * $myPaypal->ipnData['first_name'];
+			 * $myPaypal->ipnData['last_name'];
+			 * $myPaypal->ipnData['address_name']
+			 * $myPaypal->ipnData['address_street']
+			 * $myPaypal->ipnData['address_city']
+			 * $myPaypal->ipnData['address_state']
+			 * $myPaypal->ipnData['address_zip']
+			 * $myPaypal->ipnData['address_country']
+			 * $myPaypal->ipnData['address_country_code']
+			 * $myPaypal->ipnData['test_ipn']
+			 *
+			 * // Save to Invoices
+			 */
+		}
+	}
+
 }
+
 ?>
